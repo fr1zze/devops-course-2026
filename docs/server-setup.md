@@ -361,3 +361,76 @@ echo $?
 При намеренном изменении MaxAuthTries служба SSH не перезапускается: скрипт читает параметры с диска через sshd -T.
 После теста обязательно вернуть MaxAuthTries 3 и повторить синтаксическую проверку и аудит.
 Аудит проверяет перечисленные параметры конфигурации; фактический порт и возможность нового подключения дополнительно подтверждаются командами ss и ssh.
+## 8. Веб-сервер
+
+Установлен пакет nginx. Служба включена в автозагрузку:
+
+```bash
+sudo apt install -y nginx
+sudo systemctl enable --now nginx
+```
+
+### Конфигурация сайта
+
+- Файл конфигурации: `/etc/nginx/sites-available/devops-site`.
+- Ссылка на него: `/etc/nginx/sites-enabled/devops-site`.
+- Стандартный сайт `/etc/nginx/sites-enabled/default` отключён удалением ссылки.
+- Имя сайта: `devops.local`.
+- HTTP, порт 80: перенаправление на HTTPS с кодом 301.
+- HTTPS, порт 443: публикация статических файлов.
+- Разрешённые версии TLS: 1.2 и 1.3.
+- Каталог сайта: `/var/www/devops-site`.
+- Владелец и группа: `devops:devops`.
+- Права каталогов: 755, файлов: 644.
+- Главная страница: `index.html`.
+- Страница ошибки 404: `404.html`.
+- Журнал запросов HTTPS: `/var/log/nginx/devops-site.access.log`.
+- Журнал ошибок HTTPS: `/var/log/nginx/devops-site.error.log`.
+
+Рабочие процессы Nginx выполняются от имени www-data.
+Они могут читать файлы сайта, но не изменять их.
+
+Проверка и применение конфигурации:
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+### Сертификат HTTPS
+
+Используется самоподписанный сертификат RSA 2048 бит для devops.local.
+Срок действия — 365 дней, до 29 октября 2027 года.
+
+- Сертификат: `/etc/ssl/certs/devops.crt`, владелец root:root, права 644.
+- Закрытый ключ: `/etc/ssl/private/devops.key`, владелец root:root, права 600.
+- CN: devops.local.
+- SAN: DNS:devops.local.
+
+Команда создания нового сертификата:
+
+```bash
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/ssl/private/devops.key \
+  -out /etc/ssl/certs/devops.crt \
+  -subj "/CN=devops.local" \
+  -addext "subjectAltName=DNS:devops.local"
+
+sudo chown root:root /etc/ssl/private/devops.key /etc/ssl/certs/devops.crt
+sudo chmod 600 /etc/ssl/private/devops.key
+sudo chmod 644 /etc/ssl/certs/devops.crt
+```
+
+Команда приведена для восстановления; повторное выполнение создаёт новую пару ключа и сертификата.
+
+### Доставка сайта
+
+Исходные страницы находятся в каталоге site/ репозитория.
+Скрипт scripts/deploy.sh запускается на хосте через WSL.
+Он проверяет наличие index.html и чистоту рабочего дерева Git,
+передаёт файлы через rsync по SSH и устанавливает права D755,F644.
+
+После передачи выполняется HTTPS-проверка с сертификатом
+/root/devops.crt в WSL. Режим --dry-run только показывает изменения.
+
+Снимок ВМ после настройки HTTPS: 04-nginx-https.
