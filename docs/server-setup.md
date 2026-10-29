@@ -434,3 +434,134 @@ sudo chmod 644 /etc/ssl/certs/devops.crt
 /root/devops.crt в WSL. Режим --dry-run только показывает изменения.
 
 Снимок ВМ после настройки HTTPS: 04-nginx-https.
+
+## 9. Контейнеризация
+
+### Установка Docker
+
+Docker Engine Community установлен из официального APT-репозитория
+https://download.docker.com/linux/ubuntu.
+
+Установлены пакеты docker-ce, docker-ce-cli, containerd.io,
+docker-buildx-plugin и docker-compose-plugin.
+
+Версия Docker Engine: 29.9.2.
+Версия Docker Compose: 5.6.1.
+
+Ранее установленный Docker из Snap остановлен и отключён:
+
+```bash
+sudo snap stop --disable docker
+```
+
+Официальная служба Docker включена в автозагрузку:
+
+```bash
+sudo systemctl enable --now docker
+```
+
+Пользователь devops добавлен в группу docker:
+
+```bash
+sudo usermod -aG docker devops
+```
+
+После изменения групп необходимо заново подключиться по SSH.
+Проверка работы без sudo:
+
+```bash
+docker version
+docker compose version
+docker run --rm hello-world
+```
+
+### Расположение проекта
+
+Исходные файлы находятся в каталоге app репозитория.
+На сервере проект размещён в /home/devops/app.
+
+Для переноса файлов из PowerShell Windows, из корня репозитория:
+
+```powershell
+ssh devops "mkdir -p ~/app"
+scp .\app\app.py .\app\requirements.txt .\app\Dockerfile .\app\.dockerignore .\app\.env.example .\app\docker-compose.yml devops:app/
+```
+
+Здесь devops — SSH-псевдоним сервера из предыдущих разделов.
+
+### Переменные окружения
+
+Файл /home/devops/app/.env создаётся только на сервере.
+Он принадлежит пользователю devops и имеет права 600.
+В Git хранится только шаблон .env.example.
+
+При первоначальной настройке:
+
+```bash
+cd ~/app
+cp .env.example .env
+chmod 600 .env
+sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
+```
+
+При повторном развёртывании существующий .env сохраняется.
+Пароль в нём должен соответствовать паролю уже созданной базы.
+
+### Запуск, сеть и хранение данных
+
+```bash
+cd ~/app
+docker compose up -d --build
+docker compose ps
+```
+
+Сервисы app и db используют сеть app_backend.
+Приложение обращается к PostgreSQL по имени db.
+Запуск приложения ожидает состояния healthy у базы данных.
+
+Порт приложения опубликован только на 127.0.0.1:5000.
+Порт PostgreSQL 5432 на сервере не опубликован.
+
+Данные PostgreSQL хранятся в именованном томе app_db_data,
+подключённом к /var/lib/postgresql/data внутри контейнера.
+
+docker compose down сохраняет том и данные.
+docker compose down -v удаляет том и базу данных.
+Для обычной остановки флаг -v не используется.
+
+### Обратный прокси-сервер
+
+В HTTPS-блок файла /etc/nginx/sites-available/devops-site добавлено:
+
+```nginx
+location /app/ {
+    proxy_pass http://127.0.0.1:5000/;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+Статическая страница в /var/www/devops-site сохранена.
+Настройки сертификата и HTTPS описаны в предыдущем разделе.
+
+Проверка и применение конфигурации:
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+Приложение доступно по https://devops.local/app/.
+Проверка работоспособности: https://devops.local/app/health.
+
+При остановке приложения Nginx возвращает 502.
+Причина фиксируется в /var/log/nginx/devops-site.error.log.
+Восстановление:
+
+```bash
+cd ~/app
+docker compose start app
+```
+
+Создан снимок VM: 05-docker-compose.
