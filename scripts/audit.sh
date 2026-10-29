@@ -85,6 +85,37 @@ web_permissions_ok() {
 web_permissions_ok
 check "Нет записи для всех, права закрытого ключа 600" "0" "$?"
 
+echo "[5] Containerization"
+
+check "Docker service is active" "active" \
+    "$(systemctl is-active docker)"
+
+check "PostgreSQL container is healthy" "healthy" \
+    "$(docker inspect -f '{{.State.Health.Status}}' app-db-1)"
+
+container_ports_ok() {
+    local listeners
+
+    listeners=$(ss -H -ltn) || return 1
+
+    awk '
+        $4 ~ /:(5000|5432)$/ {
+            if ($4 != "127.0.0.1:5000" &&
+                $4 != "127.0.0.1:5432") {
+                bad = 1
+            }
+        }
+        END {
+            exit bad
+        }
+    ' <<< "$listeners"
+}
+
+container_ports_ok
+check "Ports 5000 and 5432 are restricted to 127.0.0.1" "0" "$?"
+
+check "App environment file has permissions 600" "600" \
+    "$(stat -c '%a' /home/devops/app/.env)"
 
 echo "Пройдено: $PASS, не пройдено: $FAIL"
 
